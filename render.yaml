@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: mcp-wayback-machine
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: corepack enable && yarn install --immutable && yarn build
+    startCommand: node dist/index.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: MCP_TRANSPORT
+        value: http
+      - key: HOST
+        value: 0.0.0.0
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22
+      - key: MCP_BASE_URL
+        sync: false
+      - key: OAUTH_CLIENT_ID
+        generateValue: true
+      - key: OAUTH_CLIENT_SECRET
+        generateValue: true
+      - key: OAUTH_REDIRECT_URIS
+        value: https://claude.ai/api/mcp/auth_callback,http://localhost:33418/oauth/callback
