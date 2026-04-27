@@ -28,6 +28,7 @@ export interface PreRegisteredClient {
 
 export interface InMemoryOAuthProviderOptions {
 	client: PreRegisteredClient;
+	allowDynamicRegistration?: boolean;
 }
 
 interface StoredAuthorizationCode {
@@ -51,10 +52,17 @@ interface StoredRefreshToken {
 }
 
 class StaticClientsStore implements OAuthRegisteredClientsStore {
-	private readonly client: OAuthClientInformationFull;
+	private readonly preRegistered: OAuthClientInformationFull;
+	private readonly dynamic = new Map<string, OAuthClientInformationFull>();
+	// When set, exposes Dynamic Client Registration. MCP clients without a UI
+	// for static credentials (e.g. Claude.ai's connector) self-register; the
+	// pre-registered env-driven client always remains valid.
+	readonly registerClient?: (
+		client: OAuthClientInformationFull,
+	) => Promise<OAuthClientInformationFull>;
 
-	constructor(client: PreRegisteredClient) {
-		this.client = {
+	constructor(client: PreRegisteredClient, allowDynamic: boolean) {
+		this.preRegistered = {
 			client_id: client.clientId,
 			client_secret: client.clientSecret,
 			redirect_uris: client.redirectUris,
@@ -62,15 +70,22 @@ class StaticClientsStore implements OAuthRegisteredClientsStore {
 			response_types: ['code'],
 			token_endpoint_auth_method: 'client_secret_post',
 		};
+		if (allowDynamic) {
+			this.registerClient = async (
+				incoming: OAuthClientInformationFull,
+			): Promise<OAuthClientInformationFull> => {
+				this.dynamic.set(incoming.client_id, incoming);
+				return incoming;
+			};
+		}
 	}
 
 	async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
-		if (!constantTimeEqualString(clientId, this.client.client_id)) {
-			return undefined;
+		if (constantTimeEqualString(clientId, this.preRegistered.client_id)) {
+			return this.preRegistered;
 		}
-		return this.client;
+		return this.dynamic.get(clientId);
 	}
-	// registerClient intentionally omitted: Dynamic Client Registration is disabled.
 }
 
 export class InMemoryOAuthProvider implements OAuthServerProvider {
@@ -81,7 +96,10 @@ export class InMemoryOAuthProvider implements OAuthServerProvider {
 	private readonly refreshTokens = new Map<string, StoredRefreshToken>();
 
 	constructor(options: InMemoryOAuthProviderOptions) {
-		this.clientsStore = new StaticClientsStore(options.client);
+		this.clientsStore = new StaticClientsStore(
+			options.client,
+			options.allowDynamicRegistration ?? false,
+		);
 	}
 
 	async authorize(

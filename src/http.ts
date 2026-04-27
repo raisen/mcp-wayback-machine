@@ -1,5 +1,9 @@
+import { metadataHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/metadata.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import {
+	createOAuthMetadata,
+	mcpAuthRouter,
+} from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express, { type Request, type Response } from 'express';
 
@@ -12,6 +16,7 @@ export interface HttpServerConfig {
 	publicBaseUrl: URL;
 	mcpPath: string;
 	client: PreRegisteredClient;
+	allowDynamicRegistration: boolean;
 }
 
 export function loadHttpConfigFromEnv(): HttpServerConfig {
@@ -40,17 +45,27 @@ export function loadHttpConfigFromEnv(): HttpServerConfig {
 		.map((u) => u.trim())
 		.filter(Boolean);
 
+	// Default DCR ON: Claude.ai's connector flow uses Dynamic Client Registration
+	// (the Advanced-Settings UI for static creds isn't exposed in the web flow).
+	// Set OAUTH_ALLOW_DYNAMIC_REGISTRATION=false to lock down to the pre-registered
+	// client only — Claude Desktop with Advanced Settings still works in that mode.
+	const allowDynamicRegistration = process.env.OAUTH_ALLOW_DYNAMIC_REGISTRATION !== 'false';
+
 	return {
 		port,
 		host,
 		publicBaseUrl,
 		mcpPath: process.env.MCP_PATH ?? '/mcp',
 		client: { clientId, clientSecret, redirectUris },
+		allowDynamicRegistration,
 	};
 }
 
 export function buildHttpApp(config: HttpServerConfig): express.Express {
-	const provider = new InMemoryOAuthProvider({ client: config.client });
+	const provider = new InMemoryOAuthProvider({
+		client: config.client,
+		allowDynamicRegistration: config.allowDynamicRegistration,
+	});
 
 	const app = express();
 	app.disable('x-powered-by');
@@ -82,8 +97,37 @@ export function buildHttpApp(config: HttpServerConfig): express.Express {
 		res.json({ status: 'ok' });
 	});
 
-	// OAuth metadata + /authorize + /token endpoints. Mounted at root because the
-	// well-known metadata paths must resolve at the issuer origin.
+	// RFC 9728 / MCP discovery: when the protected resource has a non-root path
+	// (we use /mcp), modern clients also probe path-suffixed well-known URLs:
+	//   /.well-known/oauth-protected-resource/mcp
+	//   /.well-known/oauth-authorization-server/mcp
+	// The SDK's router only mounts the un-suffixed variants; mirror them here so
+	// Claude.ai's connector discovery (which uses the suffixed form) succeeds.
+	// These must be registered BEFORE mcpAuthRouter — the SDK mounts the
+	// un-suffixed routes via `router.use(...)` which prefix-matches and the
+	// inner router ends the response with 404 rather than falling through.
+	const oauthMetadata = createOAuthMetadata({
+		provider,
+		issuerUrl: config.publicBaseUrl,
+		scopesSupported: [],
+	});
+	const protectedResourceMetadata = {
+		resource: config.publicBaseUrl.href,
+		authorization_servers: [oauthMetadata.issuer],
+		scopes_supported: [],
+		resource_name: 'MCP Wayback Machine',
+	};
+	app.use(
+		`/.well-known/oauth-protected-resource${config.mcpPath}`,
+		metadataHandler(protectedResourceMetadata),
+	);
+	app.use(
+		`/.well-known/oauth-authorization-server${config.mcpPath}`,
+		metadataHandler(oauthMetadata),
+	);
+
+	// OAuth metadata + /authorize + /token + /register endpoints. Mounted at root
+	// because the un-suffixed well-known metadata paths resolve at the issuer origin.
 	app.use(
 		mcpAuthRouter({
 			provider,
@@ -94,7 +138,7 @@ export function buildHttpApp(config: HttpServerConfig): express.Express {
 	);
 
 	const resourceMetadataUrl = new URL(
-		'/.well-known/oauth-protected-resource',
+		`/.well-known/oauth-protected-resource${config.mcpPath}`,
 		config.publicBaseUrl,
 	).href;
 
