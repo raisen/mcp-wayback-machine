@@ -73,7 +73,7 @@ Check archival statistics for a URL.
 
 ### Technical Details
 
-- **Transport**: Stdio (for Claude Desktop integration)
+- **Transport**: Stdio (for local Claude Desktop) **or** Streamable HTTP with OAuth 2.1 + PKCE (for hosted/remote use)
 - **HTTP Client**: Built-in fetch with timeout support
 - **Rate Limiting**: 15 requests per minute (conservative limit)
 - **Error Handling**: Graceful handling with detailed error messages
@@ -223,6 +223,76 @@ Add to your Claude Desktop settings:
     }
   }
 }
+```
+
+## Remote Deployment (Render free tier + OAuth)
+
+The server can also run as a remote, OAuth-protected Streamable HTTP endpoint.
+Connecting clients (e.g. Claude Desktop / Claude.ai) authenticate using OAuth 2.1
+with PKCE against a single pre-registered client whose credentials are loaded
+from environment variables. Dynamic Client Registration is disabled — only the
+holder of `OAUTH_CLIENT_ID` + `OAUTH_CLIENT_SECRET` can connect.
+
+### One-click deploy
+
+1. Fork this repo.
+2. In Render, choose **New → Blueprint** and point it at your fork. The
+   included `render.yaml` provisions a free-plan web service.
+3. After the service is created, set `MCP_BASE_URL` to the public URL Render
+   assigns (e.g. `https://mcp-wayback-machine.onrender.com`). `OAUTH_CLIENT_ID`
+   and `OAUTH_CLIENT_SECRET` are auto-generated; copy them from the Render env
+   var dashboard — you'll paste them into Claude Desktop next.
+4. Re-deploy. The MCP endpoint will be at `${MCP_BASE_URL}/mcp` and OAuth
+   metadata at `${MCP_BASE_URL}/.well-known/oauth-authorization-server`.
+
+### Environment variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `MCP_TRANSPORT` | yes (= `http`) | Switches the entry point from stdio to HTTP. |
+| `MCP_BASE_URL` | yes | Public origin of the deployed service. Used as the OAuth issuer URL and in resource metadata. |
+| `OAUTH_CLIENT_ID` | yes | Pre-registered OAuth client ID. |
+| `OAUTH_CLIENT_SECRET` | yes | Pre-registered OAuth client secret. |
+| `OAUTH_REDIRECT_URIS` | no | Comma-separated allow-list of redirect URIs. Defaults to Claude.ai's callback plus `localhost`. |
+| `MCP_PATH` | no | Path the MCP transport is mounted at. Defaults to `/mcp`. |
+| `PORT` / `HOST` | no | Bind address. Render sets `PORT` automatically. |
+
+### Connecting Claude Desktop to the remote server
+
+In Claude Desktop, add a remote MCP server with URL `${MCP_BASE_URL}/mcp`,
+then open **Advanced Settings** and paste the values of `OAUTH_CLIENT_ID` and
+`OAUTH_CLIENT_SECRET`. Claude Desktop auto-discovers `/authorize`, `/token`,
+and the protected-resource metadata via the well-known endpoints, then runs
+the OAuth 2.1 + PKCE flow against the pre-registered client.
+
+### Notes & gotchas
+
+- **Free tier cold starts:** Render spins the service down after ~15 minutes
+  idle. All in-memory tokens are lost on cold start, so users may need to
+  re-authorize after a long idle. The pre-registered client survives because
+  it's rebuilt from env vars at startup.
+- **Stateless transport:** the HTTP transport uses `sessionIdGenerator: undefined`
+  so each request is independent. This avoids issues with cold starts and
+  multiple Render instances.
+- **Bearer-only static tokens are not supported by Claude Desktop** — OAuth 2.1
+  with PKCE is required, which is why we ship a real authorization server
+  rather than a static `Authorization: Bearer …` shortcut.
+
+### Running the HTTP server locally
+
+```bash
+OAUTH_CLIENT_ID=dev-client \
+OAUTH_CLIENT_SECRET=dev-secret \
+MCP_BASE_URL=http://localhost:3000 \
+PORT=3000 \
+yarn build && yarn start:http
+```
+
+Then verify with:
+
+```bash
+curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
+curl -i -X POST http://localhost:3000/mcp # → 401 with WWW-Authenticate
 ```
 
 ## Development
