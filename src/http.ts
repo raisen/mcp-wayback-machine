@@ -92,6 +92,38 @@ export function buildHttpApp(config: HttpServerConfig): express.Express {
 		});
 	}
 
+	// OAuth diagnostic logger: logs sanitized payloads for /register, /authorize,
+	// /token so we can see what an MCP client actually sent when an error like
+	// "Invalid client_secret" comes back. Disable with LOG_OAUTH=false.
+	if (process.env.LOG_OAUTH !== 'false') {
+		const oauthDiag = express.urlencoded({ extended: false });
+		const oauthDiagJson = express.json();
+		const tag = (s: string | undefined, n = 8) =>
+			s ? `${s.slice(0, n)}…(len=${s.length})` : '<absent>';
+		app.use(['/token', '/authorize', '/register'], (req, _res, next) => {
+			const ct = req.headers['content-type'] ?? '';
+			const handler = ct.includes('json') ? oauthDiagJson : oauthDiag;
+			handler(req, _res, (err) => {
+				if (err) return next(err);
+				const body = (req.body ?? {}) as Record<string, unknown>;
+				const q = req.query as Record<string, unknown>;
+				const merged = { ...q, ...body };
+				const summary: Record<string, unknown> = {
+					path: req.path,
+					method: req.method,
+					grant_type: merged.grant_type,
+					client_id: tag(merged.client_id as string | undefined, 16),
+					client_secret: tag(merged.client_secret as string | undefined, 6),
+					redirect_uri: merged.redirect_uri,
+					code_challenge_method: merged.code_challenge_method,
+					token_endpoint_auth_method: merged.token_endpoint_auth_method,
+				};
+				console.log(`[oauth] ${JSON.stringify(summary)}`);
+				next();
+			});
+		});
+	}
+
 	// Liveness probe (Render's health check hits this if configured).
 	app.get('/healthz', (_req, res) => {
 		res.json({ status: 'ok' });
