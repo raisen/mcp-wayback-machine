@@ -22,7 +22,13 @@ export function loadHttpConfigFromEnv(): HttpServerConfig {
 	}
 
 	const host = process.env.HOST ?? '0.0.0.0';
-	const publicBaseUrl = new URL(process.env.MCP_BASE_URL ?? `http://localhost:${port}`);
+	// Resolution order for the public base URL:
+	//   1. MCP_BASE_URL — explicit override (any environment).
+	//   2. RENDER_EXTERNAL_URL — auto-injected on Render, e.g. https://foo.onrender.com.
+	//   3. Fallback to localhost for local dev.
+	const baseUrlRaw =
+		process.env.MCP_BASE_URL ?? process.env.RENDER_EXTERNAL_URL ?? `http://localhost:${port}`;
+	const publicBaseUrl = new URL(baseUrlRaw);
 
 	const clientId = requireEnv('OAUTH_CLIENT_ID');
 	const clientSecret = requireEnv('OAUTH_CLIENT_SECRET');
