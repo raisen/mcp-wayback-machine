@@ -60,6 +60,23 @@ export function buildHttpApp(config: HttpServerConfig): express.Express {
 	// on /authorize and /token, breaking the OAuth handshake.
 	app.set('trust proxy', 1);
 
+	// Lightweight access log for the OAuth/MCP routes. Helps diagnose connector
+	// failures from MCP clients (Claude.ai, Claude Desktop) since Render free
+	// tier doesn't expose request logs separately.
+	if (process.env.LOG_REQUESTS !== 'false') {
+		app.use((req, res, next) => {
+			const start = Date.now();
+			const ua = req.headers['user-agent'] ?? '';
+			res.on('finish', () => {
+				const ms = Date.now() - start;
+				console.log(
+					`[req] ${req.method} ${req.originalUrl} -> ${res.statusCode} ${ms}ms ua="${String(ua).slice(0, 80)}"`,
+				);
+			});
+			next();
+		});
+	}
+
 	// Liveness probe (Render's health check hits this if configured).
 	app.get('/healthz', (_req, res) => {
 		res.json({ status: 'ok' });
