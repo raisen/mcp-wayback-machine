@@ -4,6 +4,7 @@ services:
     runtime: node
     plan: free
     region: oregon
+    repo: https://github.com/raisen/mcp-wayback-machine
     branch: claude/add-oauth-fastmcp-sCDJW
     buildCommand: corepack enable && yarn install --immutable && yarn build
     startCommand: node dist/index.js
