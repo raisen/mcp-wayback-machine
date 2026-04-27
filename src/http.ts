@@ -54,6 +54,11 @@ export function buildHttpApp(config: HttpServerConfig): express.Express {
 
 	const app = express();
 	app.disable('x-powered-by');
+	// On Render (and most PaaS), inbound requests reach Express via a single
+	// reverse proxy that sets X-Forwarded-For/Proto. Without this, the SDK's
+	// internal express-rate-limit middleware throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+	// on /authorize and /token, breaking the OAuth handshake.
+	app.set('trust proxy', 1);
 
 	// Liveness probe (Render's health check hits this if configured).
 	app.get('/healthz', (_req, res) => {
